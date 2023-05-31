@@ -1,7 +1,6 @@
 /*
  * GField.cpp
  * 
- * Copyright 2014 Patrick Derbez <patrick.derbez@uni.lu>
  * 
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
