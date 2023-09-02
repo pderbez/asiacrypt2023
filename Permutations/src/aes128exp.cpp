@@ -149,59 +149,50 @@ vector<vector<unsigned>> modelAES128(int R, vector<int> & KPerm, int nrSboxesWan
 }
 
 
-void searchMILP(vector<pair<unsigned, unsigned>> const & myconstraints) {
+void searchMILP(vector<pair<unsigned, unsigned>> const & myconstraints, int size_perm) {
   GRBEnv env = GRBEnv(true);
   env.set("LogFile", "mip1.log");
   env.start();
-  vector<int> KPerm(16, 16);
+  vector<int> KPerm(size_perm, size_perm);
 
   GRBModel model = GRBModel(env);
   model.set(GRB_IntParam_OutputFlag , 0);
-  
+
   unsigned max_R = 0;
   for (auto const & p : myconstraints) {
     if (max_R < p.first) max_R = p.first;
   }
-  
+
   if (max_R > 2) max_R -= 1;
 
-  vector<vector<vector<GRBVar>>> P (max_R, vector<vector<GRBVar>> (16, vector<GRBVar> (16)));
+  vector<vector<vector<GRBVar>>> P (max_R, vector<vector<GRBVar>> (size_perm, vector<GRBVar> (size_perm)));
 
   for (unsigned r = 1; r < max_R; ++r) {
-    for (unsigned i = 0; i < 16; ++i) {
-      for (unsigned j = 0; j < 16; ++j) P[r][i][j] = model.addVar(0.0, 1.0, 0.0, GRB_BINARY);
+    for (unsigned i = 0; i < size_perm; ++i) {
+      for (unsigned j = 0; j < size_perm; ++j) P[r][i][j] = model.addVar(0.0, 1.0, 0.0, GRB_BINARY);
     }
-    for (unsigned i = 0; i < 16; ++i) {
+    for (unsigned i = 0; i < size_perm; ++i) {
       GRBLinExpr e = 0;
-      for (unsigned j = 0; j < 16; ++j) e += P[r][i][j];
+      for (unsigned j = 0; j < size_perm; ++j) e += P[r][i][j];
       model.addConstr(e == 1);
     }
 
-    for (unsigned i = 0; i < 16; ++i) {
+    for (unsigned i = 0; i < size_perm; ++i) {
       GRBLinExpr e = 0;
-      for (unsigned j = 0; j < 16; ++j) e += P[r][j][i];
+      for (unsigned j = 0; j < size_perm; ++j) e += P[r][j][i];
       model.addConstr(e == 1);
     }
   }
 
 
-   for (unsigned c = 0; c < 4; ++c) {
-     for (unsigned l1 = 0; l1 < 4; ++l1) {
-       for (unsigned l2 = 0; l2 < 4; ++l2) {
-         model.addConstr(P[1][4*l1 + ((c+l1)%4)][4*l2 + c] == 0);
-         //model.addConstr(P[1][4*l2 + c][4*l1 + ((c+l1)%4)] == 0);
-       }
-     }
-   }
+  auto const n_cols_perm = size_perm/4;
 
- 
-
-
-  for (unsigned j0 = 0; j0 < 16; ++j0) {
+  // remove symetries
+  for (unsigned j0 = 0; j0 < size_perm; ++j0) {
     for (unsigned i = 1; i < 4; ++i) {
-      for (unsigned j = 0; j < 16; ++j) {
-        unsigned jj = 4*(j/4) + (j%4 - i + 4)%4;
-        if (jj < j0) model.addConstr(P[1][i][jj] <= 1 - P[1][0][j0]);
+      for (unsigned j = 0; j < size_perm; ++j) {
+        unsigned jj = n_cols_perm*(j/n_cols_perm) + (j%n_cols_perm - i + n_cols_perm)%n_cols_perm;
+        if (jj < j0) model.addConstr(P[1][i][j] <= 1 - P[1][0][j0]);
       }
     }
   }
@@ -224,20 +215,20 @@ void searchMILP(vector<pair<unsigned, unsigned>> const & myconstraints) {
     auto nSolutions = model.get(GRB_IntAttr_SolCount);
     if (nSolutions == 0) {cout << "pas de solutions" << endl; getchar();}
     model.set(GRB_IntParam_SolutionNumber, 0);
-    for (unsigned i = 0; i < 16; ++i) {
+    for (unsigned i = 0; i < size_perm; ++i) {
       unsigned j = 0;
       while (P[1][i][j].get(GRB_DoubleAttr_Xn) < 0.5) ++j;
       KPerm[i] = j;
     }
-    for (unsigned i = 0; i < 16; ++i) cout << KPerm[i] << " ";
+    for (unsigned i = 0; i < size_perm; ++i) cout << KPerm[i] << " ";
     cout << endl;
-    
+
     unsigned j = 0;
-    
+
     unsigned R = myconstraints[0].first;
     unsigned nbsboxes = myconstraints[0].second;
 
-    auto v_res = modelAES128(R, KPerm, nbsboxes, env); 
+    auto v_res = modelAES128(R, KPerm, nbsboxes, env);
     while (v_res.empty() && ++j < myconstraints.size()) {
     	R = myconstraints[j].first;
     	nbsboxes = myconstraints[j].second;
@@ -245,11 +236,11 @@ void searchMILP(vector<pair<unsigned, unsigned>> const & myconstraints) {
     }
     if (v_res.empty()) {
       cout << "yeah!!" << endl;
-      for (unsigned i = 0; i < 16; ++i) cout << KPerm[i] << " ";
+      for (unsigned i = 0; i < size_perm; ++i) cout << KPerm[i] << " ";
       getchar();
       GRBLinExpr e = 0;
-      for (unsigned i = 0; i < 16; ++i) e += P[1][i][KPerm[i]];
-      model.addConstr(e <= 15);
+      for (unsigned i = 0; i < size_perm; ++i) e += P[1][i][KPerm[i]];
+      model.addConstr(e <= size_perm-1);
     }
     else {
       cout << "v_res: " << v_res.size() << endl;
