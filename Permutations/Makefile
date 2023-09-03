@@ -13,7 +13,7 @@ LDFLAGS := -L$(GRBPATH)/linux64/lib -lgurobi_c++ -lgurobi95 -ltbb -lm
 #LDFLAGS := -L/Library/gurobi952/macos_universal2/lib -lgurobi_c++ -lgurobi95
 
 CXX      := -g++
-CXXFLAGS := -Wall -Wextra -std=c++11
+CXXFLAGS := -Wall -Wextra -std=c++11 -O3
 #LDFLAGS  := -L/usr/lib -lstdc++ -lm
 BUILD    := ./build
 OBJ_DIR  := $(BUILD)/objects
