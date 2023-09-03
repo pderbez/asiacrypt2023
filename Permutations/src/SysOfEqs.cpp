@@ -97,7 +97,7 @@ Matrix AES128eqs(unsigned R, int *KPerm, vector<vector<unsigned>> const & subkey
     unsigned c_subk = (c-4)%nb_cols_perm;
     if (r_subk == 0) continue;
     for (unsigned l = 0; l < 4; ++l) {
-      unsigned x = subkeys[r_subk][4*c_subk + l];
+      unsigned x = subkeys[r_subk][c_subk + nb_cols_perm*l];
       unsigned rx = 1;
       unsigned cx = x%nb_cols_perm;
       unsigned lx = x/nb_cols_perm;

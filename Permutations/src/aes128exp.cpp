@@ -75,7 +75,7 @@ vector<vector<unsigned>> modelAES128(int R, vector<int> & KPerm, int nrSboxesWan
       unsigned c_subk = (c-4)%nb_cols_perm;
       if (r_subk == 0) continue;
       for (unsigned l = 0; l < 4; ++l) {
-        unsigned x = subkeys[r_subk][4*c_subk + l];
+        unsigned x = subkeys[r_subk][c_subk + nb_cols_perm*l];
         unsigned rx = 1;
         unsigned cx = x%nb_cols_perm;
         unsigned lx = x/nb_cols_perm;
@@ -152,7 +152,7 @@ vector<vector<unsigned>> modelAES128(int R, vector<int> & KPerm, int nrSboxesWan
 
     mycallback cb ((3*R+1)*16, dX.data(), mat);
     model.setCallback(&cb);
-    //model.set(GRB_IntParam_OutputFlag , (R == 6) ? 1 : 0);
+    model.set(GRB_IntParam_OutputFlag , 0);
     model.set(GRB_IntParam_LazyConstraints , 1);
     // model.set(GRB_IntParam_PoolSolutions, 2000000);
     // model.set(GRB_DoubleParam_PoolGap, 0.001);
@@ -175,7 +175,10 @@ vector<vector<unsigned>> modelAES128(int R, vector<int> & KPerm, int nrSboxesWan
           for (unsigned r = 1; r < R; ++r) {
             for (unsigned c = 0; c < 4; ++c) {
               for (unsigned l = 0; l < 4; ++l) {
-                if (dX[16*(3*r + 2) + 4*l + c].get(GRB_DoubleAttr_Xn) > 0.5) res.emplace_back(4*l + c_sub);
+                if (dX[16*(3*r + 2) + 4*l + c].get(GRB_DoubleAttr_Xn) > 0.5) {
+                  res.emplace_back(nb_cols_perm*l + c_sub);
+                  //cout << r << "," << c << "," << l << " -> " << nb_cols_perm*l + c_sub << endl;
+                }
               }
               c_sub += 1;
               if (c_sub == nb_cols_perm) {
@@ -185,6 +188,48 @@ vector<vector<unsigned>> modelAES128(int R, vector<int> & KPerm, int nrSboxesWan
               }
             }
           }
+          while (c_sub%nb_cols_perm != 0) {
+            for (unsigned l = 0; l < 4; ++l) res.emplace_back(nb_cols_perm*l + c_sub);
+            ++c_sub;
+          }
+          if (!res.empty()) v_res.emplace_back(res);
+
+          // for (unsigned i = 0; i < size_perm; ++i) cout << i << ": " << KPerm[i] << " - ";
+          // cout << endl;
+          //
+          // for (unsigned r = 0; r < subkeys.size(); ++r) {
+          //   for (unsigned l = 0; l < 4; ++l) {
+          //     for (unsigned c = 0; c < nb_cols_perm; ++c) cout << subkeys[r][nb_cols_perm*l + c] << " ";
+          //     cout << endl;
+          //   }
+          //   cout << endl << endl;
+          // }
+          // getchar();
+
+
+          // cout << endl;
+          //
+          // for (unsigned r = 1; r < R; ++r) {
+          //   for (unsigned l = 0; l < 4; ++l) {
+          //     for (unsigned c = 0; c < 4; ++c) {
+          //       if (dX[16*(3*r + 0) + 4*l + c].get(GRB_DoubleAttr_Xn) > 0.5) cout << " 1 ";
+          //       else cout << " 0 ";
+          //     }
+          //     cout << "   ";
+          //     for (unsigned c = 0; c < 4; ++c) {
+          //       if (dX[16*(3*r + 1) + 4*l + c].get(GRB_DoubleAttr_Xn) > 0.5) cout << " 1 ";
+          //       else cout << " 0 ";
+          //     }
+          //     cout << "  || ";
+          //     for (unsigned c = 0; c < 4; ++c) {
+          //       if (dX[16*(3*r + 2) + 4*l + c].get(GRB_DoubleAttr_Xn) > 0.5) cout << " 1 ";
+          //       else cout << " 0 ";
+          //     }
+          //     cout << endl;
+          //   }
+          //   cout << endl << endl;
+          // }
+          // getchar();
 
 
 
@@ -293,12 +338,24 @@ void searchMILP(vector<pair<unsigned, unsigned>> const & myconstraints, int size
     }
     else {
       cout << "v_res: " << v_res.size() << endl;
+
+      // for (unsigned i = 0; i < size_perm; ++i) cout << KPerm[i] << " ";
+      // cout << endl;
+      // for (unsigned r = 0; r < v_res.size(); ++r) {
+      //   for (auto x : v_res[r]) cout << x << " ";
+      //   cout << endl;
+      // }
+      // getchar();
+
       unsigned bound = 0;
       GRBLinExpr e = 0;
       for (unsigned r = 1; r < v_res.size(); ++r) {
         for (auto i1 : v_res[r-1]) {
           for (auto i2 : v_res[r]) e += P[1][i1][i2];
           bound += 1;
+          // bool test = false;
+          // for (auto i2 : v_res[r]) if (KPerm[i1] == i2) test = true;
+          // if (!test) cout << "weird" << endl;
         }
       }
       model.addConstr(e <= bound - 1);
@@ -312,7 +369,7 @@ void searchMILP(vector<pair<unsigned, unsigned>> const & myconstraints, int size
 
 
 int main(int argc, char const *argv[]) {
-    searchMILP(vector<pair<unsigned, unsigned>>({make_pair(8, 22)}), 32);
+    searchMILP(vector<pair<unsigned, unsigned>>({make_pair(9, 22)}), 32);
 
 
 
