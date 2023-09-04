@@ -188,10 +188,11 @@ vector<vector<unsigned>> modelAES128(int R, vector<int> & KPerm, int nrSboxesWan
               }
             }
           }
+          /*
           while (c_sub%nb_cols_perm != 0) {
             for (unsigned l = 0; l < 4; ++l) res.emplace_back(nb_cols_perm*l + c_sub);
             ++c_sub;
-          }
+          }*/
           if (!res.empty()) v_res.emplace_back(res);
 
           // for (unsigned i = 0; i < size_perm; ++i) cout << i << ": " << KPerm[i] << " - ";
@@ -242,11 +243,317 @@ vector<vector<unsigned>> modelAES128(int R, vector<int> & KPerm, int nrSboxesWan
 
 }
 
+vector<vector<unsigned>> modelAESBoomerang(int R, vector<int> & KPerm, GRBEnv & env) {
+
+    GRBModel model = GRBModel(env);
+
+    auto const & size_perm = KPerm.size();
+    auto const & nb_cols_perm = size_perm/4;
+
+
+    // X = 3r + 0
+    // S(X) = -(3*r + 0)
+    // Y (after MC) = 3*r + 1
+    // K = 3*r + 2
+
+    // definition of variables
+    vector<GRBVar> dX ((3*R + 1)*16); // before ARK
+    vector<GRBVar> dX2 ((3*R + 1)*16); // before ARK
+
+    vector<GRBVar> dF ((3*R + 1)*16); // before ARK
+    vector<GRBVar> dF2 ((3*R + 1)*16); // before ARK
+
+    for (unsigned i = 0; i < (3*R+1)*16; ++i) {
+        dX[i] = model.addVar(0.0, 1.0, 0.0, GRB_BINARY);
+        dX2[i] = model.addVar(0.0, 1.0, 0.0, GRB_BINARY);
+        dF[i] = model.addVar(0.0, 1.0, 0.0, GRB_BINARY);
+        dF2[i] = model.addVar(0.0, 1.0, 0.0, GRB_BINARY);
+
+        model.addConstr(dX[i] >= dF[i]);
+        model.addConstr(dX2[i] >= dF2[i]);
+
+        model.addConstr(dF[i] + dF2[i] <= 1);
+    }
+
+    for (unsigned i = 0; i < 3*16; ++i) {
+      model.addConstr(dX[i] == 0);
+      model.addConstr(dX2[i] == 0);
+    }
+
+    for (unsigned r = 1; r < R; ++r) {
+      for (unsigned i = 0; i < 16; ++i) {
+        model.addConstr(dF[16*(3*r + 2) + i] == 0);
+        model.addConstr(dF2[16*(3*r + 2) + i] == 0);
+      }
+    }
+
+    {
+      GRBLinExpr e = 0;
+      for (unsigned r = 1; r <= R; ++r) {
+        for (unsigned i = 0; i < 16; ++i) e += dX[16*(3*r) + i];
+      }
+      model.addConstr(e >= 1);
+    }
+
+    {
+      GRBLinExpr e = 0;
+      for (unsigned r = 1; r <= R; ++r) {
+        for (unsigned i = 0; i < 16; ++i) e += dX2[16*(3*r) + i];
+      }
+      model.addConstr(e >= 1);
+    }
+
+    for (unsigned i = 0; i < 16; ++i) model.addConstr(dF[16*(3*1) + i] == 0);
+    for (unsigned i = 0; i < 16; ++i) model.addConstr(dF[16*(3*R) + i] == dX[16*(3*R) + i]);
+
+    for (unsigned i = 0; i < 16; ++i) model.addConstr(dF2[16*(3*R) + i] == 0);
+    for (unsigned i = 0; i < 16; ++i) model.addConstr(dF2[16*(3*1) + i] == dX2[16*(3*1) + i]);
+
+    vector<vector<unsigned>> subkeys;
+
+    {
+      vector<unsigned> v (size_perm);
+      for (unsigned x = 0; x < size_perm; ++x) v[x] = x;
+      subkeys.emplace_back(v);
+      while (size_perm*subkeys.size() < 16*R) {
+        vector<unsigned> vv (size_perm);
+        for (unsigned i = 0; i < size_perm; ++i) vv[KPerm[i]] = v[i];
+        subkeys.emplace_back(vv);
+        v = move(vv);
+      }
+    }
+
+    for (unsigned c = 4; c < 4*R; ++c) {
+      unsigned r_roundk = c/4;
+      unsigned c_roundk = c%4;
+      unsigned r_subk = (c-4)/nb_cols_perm;
+      unsigned c_subk = (c-4)%nb_cols_perm;
+      if (r_subk == 0) continue;
+      for (unsigned l = 0; l < 4; ++l) {
+        unsigned x = subkeys[r_subk][c_subk + nb_cols_perm*l];
+        unsigned rx = 1;
+        unsigned cx = x%nb_cols_perm;
+        unsigned lx = x/nb_cols_perm;
+        while (cx >= 4) {cx -= 4; rx += 1;}
+        if (rx < R) {
+          model.addConstr(dX[16*(3*rx + 2) + 4*lx + cx] == dX[16*(3*r_roundk + 2) + 4*l + c_roundk]);
+          model.addConstr(dX2[16*(3*rx + 2) + 4*lx + cx] == dX2[16*(3*r_roundk + 2) + 4*l + c_roundk]);
+        }
+      }
+    }
+
+
+    for (unsigned r = 1; r < R; ++r) {
+      for (unsigned c = 0; c < 4; ++c) {
+        GRBLinExpr e = 0;
+        for (unsigned i = 0; i < 4; ++i) e += dX[16*(3*r + 1)  + c  + 4*i];
+        for (unsigned i = 0; i < 4; ++i) e += dX[16*(3*r + 0) + ((c + i)%4) + 4*i];
+        GRBVar f = model.addVar(0.0, 1.0, 0.0, GRB_BINARY);
+        model.addConstr(e <= 8*f);
+        model.addConstr(e >= 5*f);
+
+        GRBLinExpr e1 = 0;
+        for (unsigned i = 0; i < 4; ++i) e1 += dF[16*(3*r + 1)  + c  + 4*i];
+        for (unsigned i = 0; i < 4; ++i) model.addConstr(e1 >= 4*dF[16*(3*r + 0) + ((c + i)%4) + 4*i]);
+      }
+
+      for (unsigned c = 0; c < 4; ++c) {
+        GRBLinExpr e = 0;
+        for (unsigned i = 0; i < 4; ++i) e += dX2[16*(3*r + 1)  + c  + 4*i];
+        for (unsigned i = 0; i < 4; ++i) e += dX2[16*(3*r + 0) + ((c + i)%4) + 4*i];
+        GRBVar f = model.addVar(0.0, 1.0, 0.0, GRB_BINARY);
+        model.addConstr(e <= 8*f);
+        model.addConstr(e >= 5*f);
+
+        GRBLinExpr e1 = 0;
+        for (unsigned i = 0; i < 4; ++i) e1 += dF2[16*(3*r + 0) + ((c + i)%4) + 4*i];
+        for (unsigned i = 0; i < 4; ++i) model.addConstr(e1 >= 4*dF2[16*(3*r + 1)  + c  + 4*i]);
+      }
+    }
+
+    for (unsigned r = 1; r < R ; ++r) {
+      //ARK (sX[r+1], kX[r+1] and zX[r+1])
+      for (unsigned i = 0; i < 16; ++i) {
+        model.addConstr(1-dX[16*(3*r + 1)  + i] + dX[16*(3*r + 2)  + i] + dX[16*(3*(r+1))  + i] >= 1);
+        model.addConstr(dX[16*(3*r + 1)  + i] + 1-dX[16*(3*r + 2)  + i] + dX[16*(3*(r+1))  + i] >= 1);
+        model.addConstr(dX[16*(3*r + 1)  + i] + dX[16*(3*r + 2)  + i] + 1-dX[16*(3*(r+1))  + i] >= 1);
+
+        model.addConstr(dF[16*(3*r + 1)  + i] <= dF[16*(3*(r+1))  + i]);
+
+        model.addConstr(1-dX2[16*(3*r + 1)  + i] + dX2[16*(3*r + 2)  + i] + dX2[16*(3*(r+1))  + i] >= 1);
+        model.addConstr(dX2[16*(3*r + 1)  + i] + 1-dX2[16*(3*r + 2)  + i] + dX2[16*(3*(r+1))  + i] >= 1);
+        model.addConstr(dX2[16*(3*r + 1)  + i] + dX2[16*(3*r + 2)  + i] + 1-dX2[16*(3*(r+1))  + i] >= 1);
+
+        model.addConstr(dF2[16*(3*r + 1)  + i] >= dF2[16*(3*(r+1))  + i]);
+
+        model.addConstr(dF[16*(3*(r+1))  + i] + dF2[16*(3*r + 1)  + i] >= 1);
+
+      }
+    }
+
+    GRBLinExpr obj = 0;
+    for (unsigned r = 1; r < R; ++r) {
+      for (unsigned i = 0; i < 16; ++i) {
+        GRBVar pBCT = model.addVar(0.0, 1.0, 0.0, GRB_BINARY);
+        model.addConstr(pBCT + 1-dF[16*(3*(r+1))  + i] + 1 - dF2[16*(3*r + 1)  + i] >= 1);
+        GRBVar pDDT2 = model.addVar(0.0, 1.0, 0.0, GRB_BINARY);
+        model.addConstr(pDDT2 + dF[16*(3*(r+1))  + i] + 1 - dX[16*(3*(r+1))  + i] + 1 - dX2[16*(3*r + 1)  + i] >= 1);
+        model.addConstr(pDDT2 + dF2[16*(3*r + 1)  + i] + 1 - dX2[16*(3*r + 1)  + i] + 1 - dX[16*(3*(r+1))  + i] >= 1);
+        GRBVar pDDT = model.addVar(0.0, 1.0, 0.0, GRB_BINARY);
+        model.addConstr(pDDT + 1 - dX[16*(3*(r+1))  + i] + dF[16*(3*(r+1))  + i] + dX2[16*(3*(r+1))  + i] >= 1);
+        model.addConstr(pDDT + 1 - dX2[16*(3*(r+1))  + i] + dF2[16*(3*r+1)  + i] + dX[16*(3*(r+1))  + i] >= 1);
+        obj += 5.4*pBCT + 12*pDDT2 + 6*pDDT;
+      }
+    }
+
+    model.addConstr(obj <= 127);
+
+
+    model.setObjective(obj, GRB_MINIMIZE);
+
+
+
+
+    auto mat = AES128eqs(R, KPerm.data(), subkeys);
+
+    mycallback cb ((3*R+1)*16, dX.data(), mat);
+    model.setCallback(&cb);
+    //model.set(GRB_IntParam_OutputFlag , 0);
+    model.set(GRB_IntParam_LazyConstraints , 1);
+    // model.set(GRB_IntParam_PoolSolutions, 2000000);
+    // model.set(GRB_DoubleParam_PoolGap, 0.001);
+    // model.set(GRB_IntParam_PoolSearchMode, 2);
+
+    //printPerm(KPerm);
+
+    model.optimize();
+
+    auto nSolutions = model.get(GRB_IntAttr_SolCount);
+
+
+    vector<vector<unsigned>> v_res;
+    if (nSolutions > 0) {
+      for (auto e = 0; e < 1; e++) {
+          model.set(GRB_IntParam_SolutionNumber, e);
+
+          vector<unsigned> res;
+          unsigned c_sub = 0;
+          for (unsigned r = 1; r < R; ++r) {
+            for (unsigned c = 0; c < 4; ++c) {
+              for (unsigned l = 0; l < 4; ++l) {
+                if (dX[16*(3*r + 2) + 4*l + c].get(GRB_DoubleAttr_Xn) > 0.5) {
+                  res.emplace_back(nb_cols_perm*l + c_sub);
+                  //cout << r << "," << c << "," << l << " -> " << nb_cols_perm*l + c_sub << endl;
+                }
+              }
+              c_sub += 1;
+              if (c_sub == nb_cols_perm) {
+                c_sub = 0;
+                v_res.emplace_back(res);
+                res.clear();
+              }
+            }
+          }
+          /*
+          while (c_sub%nb_cols_perm != 0) {
+            for (unsigned l = 0; l < 4; ++l) res.emplace_back(nb_cols_perm*l + c_sub);
+            ++c_sub;
+          }*/
+          if (!res.empty()) v_res.emplace_back(res);
+
+          // for (unsigned i = 0; i < size_perm; ++i) cout << i << ": " << KPerm[i] << " - ";
+          // cout << endl;
+          //
+          // for (unsigned r = 0; r < subkeys.size(); ++r) {
+          //   for (unsigned l = 0; l < 4; ++l) {
+          //     for (unsigned c = 0; c < nb_cols_perm; ++c) cout << subkeys[r][nb_cols_perm*l + c] << " ";
+          //     cout << endl;
+          //   }
+          //   cout << endl << endl;
+          // }
+          // getchar();
+
+
+          // cout << endl;
+          //
+          for (unsigned r = 1; r < R; ++r) {
+            for (unsigned l = 0; l < 4; ++l) {
+              for (unsigned c = 0; c < 4; ++c) {
+                if (dX[16*(3*r + 0) + 4*l + c].get(GRB_DoubleAttr_Xn) > 0.5) cout << " 1 ";
+                else cout << " 0 ";
+              }
+              cout << "   ";
+              for (unsigned c = 0; c < 4; ++c) {
+                if (dX[16*(3*r + 1) + 4*l + c].get(GRB_DoubleAttr_Xn) > 0.5) cout << " 1 ";
+                else cout << " 0 ";
+              }
+              cout << "  || ";
+              for (unsigned c = 0; c < 4; ++c) {
+                if (dX[16*(3*r + 2) + 4*l + c].get(GRB_DoubleAttr_Xn) > 0.5) cout << " 1 ";
+                else cout << " 0 ";
+              }
+              cout << endl;
+            }
+            cout << endl << endl;
+          }
+          getchar();
+
+          for (unsigned r = 1; r < R; ++r) {
+            for (unsigned l = 0; l < 4; ++l) {
+              for (unsigned c = 0; c < 4; ++c) {
+                if (dX2[16*(3*r + 0) + 4*l + c].get(GRB_DoubleAttr_Xn) > 0.5) cout << " 1 ";
+                else cout << " 0 ";
+              }
+              cout << "   ";
+              for (unsigned c = 0; c < 4; ++c) {
+                if (dX2[16*(3*r + 1) + 4*l + c].get(GRB_DoubleAttr_Xn) > 0.5) cout << " 1 ";
+                else cout << " 0 ";
+              }
+              cout << "  || ";
+              for (unsigned c = 0; c < 4; ++c) {
+                if (dX2[16*(3*r + 2) + 4*l + c].get(GRB_DoubleAttr_Xn) > 0.5) cout << " 1 ";
+                else cout << " 0 ";
+              }
+              cout << endl;
+            }
+            cout << endl << endl;
+          }
+          getchar();
+
+
+
+
+      }
+    }
+
+
+    return v_res;
+
+}
+
+void testBoomerang256(unsigned R) {
+  GRBEnv env = GRBEnv(true);
+  env.set("LogFile", "mip1.log");
+  env.start();
+  vector<int> KPerm ({27,16,9,25,11,13,14,18,22,21,19,23,28,31,29,3,2,15,8,24,17,1,26,0,7,20,10,4,6,30,12,5});
+  modelAESBoomerang(R+1, KPerm, env);
+}
+
+void testBoomerang192(unsigned R) {
+  GRBEnv env = GRBEnv(true);
+  env.set("LogFile", "mip1.log");
+  env.start();
+  vector<int> KPerm ({2,17,19,9,13,12,23,0,4,21,18,16,10,20,22,1,11,3,7,5,15,6,14,8});
+  modelAESBoomerang(R+1, KPerm, env);
+}
+
 
 void searchMILP(vector<pair<unsigned, unsigned>> const & myconstraints, int size_perm) {
   GRBEnv env = GRBEnv(true);
   env.set("LogFile", "mip1.log");
   env.start();
+
+
   vector<int> KPerm(size_perm, size_perm);
 
   GRBModel model = GRBModel(env);
@@ -351,7 +658,7 @@ void searchMILP(vector<pair<unsigned, unsigned>> const & myconstraints, int size
       GRBLinExpr e = 0;
       for (unsigned r = 1; r < v_res.size(); ++r) {
         for (auto i1 : v_res[r-1]) {
-          for (auto i2 : v_res[r]) e += P[1][i1][i2];
+          for (auto i2 : v_res[r-1]) e += P[1][i1][KPerm[i2]];
           bound += 1;
           // bool test = false;
           // for (auto i2 : v_res[r]) if (KPerm[i1] == i2) test = true;
@@ -369,9 +676,14 @@ void searchMILP(vector<pair<unsigned, unsigned>> const & myconstraints, int size
 
 
 int main(int argc, char const *argv[]) {
-    searchMILP(vector<pair<unsigned, unsigned>>({make_pair(9, 22)}), 32);
+    //searchMILP(vector<pair<unsigned, unsigned>>({make_pair(9, 22)}), 32);
 
+    testBoomerang256(11);
 
+    vector<pair<unsigned, unsigned>> constraints;
+    unsigned size_perm = stoi(argv[1]);
+    for (unsigned i = 2; i < argc; i += 2) constraints.emplace_back(stoi(argv[i]), stoi(argv[i+1]));
+    searchMILP(constraints, size_perm);
 
 
 
